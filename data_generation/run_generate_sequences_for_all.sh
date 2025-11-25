@@ -3,11 +3,11 @@
 # Usage: ./run_batch_parallel.sh <CSV_DIR> <SOURCE_VIDEO_DIR> [MAX_JOBS]
 # Example: ./run_batch_parallel.sh ./annotations ./raw_videos 4
 
-CSV_DIR="/media/oeste/BeaGL2/CMORE/Sequence_Classifier_GT"
-SOURCE_VIDEO_DIR="/home/oeste/Desktop/Jun/KingLabs/WORKINGDATA/AdditionalSubjects_05_23_2025"
-MAX_JOBS=8 # Default to 4 parallel jobs if not specified
+CSV_DIR="/media/oeste/BeaGL2/CMORE/Sequence_Classifier/extra_gt"
+SOURCE_VIDEO_DIR="/home/oeste/Desktop/Jun/KingLabs/WORKINGDATA/CenteredVids"
+MAX_JOBS=12 # Default to 4 parallel jobs if not specified
 
-OUTPUT_DIR="/media/oeste/BeaGL2/CMORE/Sequence_Classifier_Data"
+OUTPUT_DIR="/media/oeste/BeaGL2/CMORE/Sequence_Classifier/extra_gt_data"
 MODEL_PATH="keypoint_detector.pt"
 
 # 1. Validate Input Arguments

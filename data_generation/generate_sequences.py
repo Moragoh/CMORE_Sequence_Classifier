@@ -6,10 +6,10 @@ import argparse
 from keypoint_detector import BoxDetector
 
 # --- CONFIGURATION ---
-DEFAULT_CLIP_LEN = 10  # Number of frames per clip
+DEFAULT_CLIP_LEN = 30  # Number of frames per clip
 DEFAULT_STRIDE = 1    # Default sliding window stride
 MODEL_PATH = "keypoint_detector.pt" 
-DEFAULT_OUT_PATH = "/media/oeste/BeaGL2/CMORE/Sequence_Classifier_Data" # Default output location (current directory)
+DEFAULT_OUT_PATH = "/media/oeste/BeaGL2/CMORE/Sequence_Classifier/Sequence_Data_30Frames" 
 SHRINK_FACTOR = 0.9    # Factor from sequence_annotator.py
 
 def get_negative_intervals(positive_intervals, total_frames):
@@ -49,7 +49,6 @@ def pad_frames(frames, target_len):
 def shrink_centroid(points, factor: float):
     """
     Shrinks the polygon defined by points towards its centroid.
-    Copied from sequence_annotator.py
     """
     centroid = np.mean(points, axis=0)
     vectors = points - centroid
@@ -59,7 +58,7 @@ def shrink_centroid(points, factor: float):
 def get_contour_points(keypoints, handedness):
     """
     Extracts specific keypoints to define the contour of the object 
-    based on handedness logic from sequence_annotator.py.
+    based on handedness logic.
     """
     if keypoints is None: return None
     try:
@@ -89,7 +88,6 @@ def get_contour_points(keypoints, handedness):
 
         return shrink_centroid(points, SHRINK_FACTOR)
     except Exception as e:
-        # print(f"Contour calculation error: {e}")
         return None
 
 def get_crop_coordinates(contour_points, img_w, img_h):
@@ -163,35 +161,52 @@ def process_intervals(video_path, intervals, output_dir, file_prefix, clip_len, 
             if not success:
                 continue
 
-            # 4. Calculate Crop Dimensions using new logic
+            # 4. Calculate Crop & Contour
             contour_points = get_contour_points(result, handedness)
             
             if contour_points is None or len(contour_points) == 0:
                 continue
 
+            # Get the bounding rect of the contour
             x, y, w, h = get_crop_coordinates(contour_points, width_orig, height_orig)
 
             # Ensure valid crop dimensions
             if w <= 0 or h <= 0:
                 continue
 
+            # --- PREPARE CONTOUR MASK ---
+            # Shift contour points to be relative to the top-left of the crop (0,0)
+            # This effectively moves the polygon into the coordinate space of the cropped image.
+            mask_contour = contour_points - np.array([x, y])
+
             # 5. Save Clip
             save_name = f"{file_prefix}_{start_f}_{ws}.mp4"
             save_path = os.path.join(output_dir, save_name)
             
-            # Initialize Video Writer with the CROP dimensions
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(save_path, fourcc, fps, (w, h))
 
             for f in frames:
-                # Crop the frame
+                # A. Crop the frame first
                 cropped_frame = f[y:y+h, x:x+w]
                 
-                # Resize check 
+                # Resize check (defensive coding if slice hits edge)
                 if cropped_frame.shape[:2] != (h, w):
                     cropped_frame = cv2.resize(cropped_frame, (w, h))
-                    
-                out.write(cropped_frame)
+                
+                # B. Create Black Mask
+                # Initialize black image of same size as crop
+                mask = np.zeros_like(cropped_frame)
+                
+                # C. Draw White Polygon on Mask
+                # fillPoly expects a list of arrays
+                cv2.fillPoly(mask, [mask_contour], (255, 255, 255))
+                
+                # D. Apply Mask (Bitwise AND)
+                # Pixels inside white polygon are kept; others become black.
+                masked_frame = cv2.bitwise_and(cropped_frame, mask)
+                
+                out.write(masked_frame)
             
             out.release()
             clip_count += 1

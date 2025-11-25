@@ -40,7 +40,7 @@ def load_video_cv2(video_path):
     return torch.from_numpy(np.stack(frames))
 
 class BinaryVideoDataset(Dataset):
-    def __init__(self, root_dir, num_frames=16, train=True):
+    def __init__(self, root_dir, num_frames, train=True):
         self.root_dir = root_dir
         self.num_frames = num_frames
         self.train = train 
@@ -105,6 +105,7 @@ class BinaryVideoDataset(Dataset):
 
         # --- 1. TEMPORAL SAMPLING ---
         if total_frames > self.num_frames:
+            print("MORE THAN")
             if self.train:
                 max_start = total_frames - self.num_frames
                 start = random.randint(0, max_start)
@@ -112,6 +113,7 @@ class BinaryVideoDataset(Dataset):
                 start = (total_frames - self.num_frames) // 2
             frames = frames[start : start + self.num_frames]
         elif total_frames < self.num_frames:
+            print("LESS THAN")
             repeats = (self.num_frames // total_frames) + 1
             frames = frames.repeat(repeats, 1, 1, 1)[:self.num_frames]
 

@@ -6,6 +6,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import matplotlib
+matplotlib.use('Agg') # <--- THIS FIXES THE CRASH
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -16,16 +18,21 @@ from dataset import BinaryVideoDataset
 #                               CONFIGURATION
 # =============================================================================
 # Path to the TRAINING set (e.g., Subject 1, Subject 3, Subject 4)
-TRAIN_ROOT = "/media/oeste/BeaGL2/CMORE/Sequence_Classifier/train"
+TRAIN_ROOT = "/media/oeste/BeaGL2/CMORE/Sequence_Classifier/CurrTrain/Train"
 
 # Path to the HELD-OUT VALIDATION set (e.g., Subject 2 only)
-# The model will NEVER see these clips during backpropagation.
-VAL_ROOT = "/media/oeste/BeaGL2/CMORE/Sequence_Classifier/Subj_03_LeftHand"
+VAL_ROOT = "/media/oeste/BeaGL2/CMORE/Sequence_Classifier/CurrTrain/Val"
 
-BATCH_SIZE = 8
+BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
-NUM_EPOCHS = 150
-NUM_FRAMES = 10
+NUM_EPOCHS = 50
+NUM_FRAMES = 30
+
+# --- NEW HYPERPARAMETERS ---
+WEIGHT_DECAY = 1e-4           # Regularization strength
+LR_PATIENCE = 10              # Epochs to wait before lowering LR
+LR_FACTOR = 0.1               # Factor to reduce LR by (LR * 0.1)
+EARLY_STOPPING_PATIENCE = 15  # Epochs to wait before stopping completely
 # =============================================================================
 
 # Check for GPU
@@ -77,11 +84,8 @@ def plot_history(train_acc, val_acc, train_loss, val_loss):
 def train():
     print("Initializing Datasets...")
     
-    # 1. Setup Datasets (Directly from separate folders)
-    # Train Set: Uses Data Augmentation (Rotation, Flip, Jitter)
+    # 1. Setup Datasets
     train_dataset = BinaryVideoDataset(root_dir=TRAIN_ROOT, num_frames=NUM_FRAMES, train=True)
-    
-    # Val Set: Deterministic (No Augmentation) - strictly for evaluation
     val_dataset = BinaryVideoDataset(root_dir=VAL_ROOT, num_frames=NUM_FRAMES, train=False)
     
     print(f"Training Data:   {len(train_dataset)} clips from {TRAIN_ROOT}")
@@ -95,18 +99,27 @@ def train():
                           num_workers=4, pin_memory=True, drop_last=False)
     
     # 2. Setup Loss with Class Weights
-    # We calculate weights based on the TRAINING set distribution only
     pos_weight = train_dataset.get_class_weights().to(device)
     print(f"Using positive class weight: {pos_weight.item():.2f}")
     
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     
-    # 3. Setup Model and Optimizer
+    # 3. Setup Model, Optimizer, Scheduler
     model = get_model().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
-    # We track BEST LOSS for checkpointing (safest for imbalance)
+    # --- ADDED WEIGHT DECAY ---
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    
+    # --- ADDED SCHEDULER ---
+    # Reduces LR when val_loss stops improving
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=LR_FACTOR, patience=LR_PATIENCE
+    )
+    
     best_val_loss = float('inf') 
+    
+    # --- ADDED EARLY STOPPING COUNTER ---
+    early_stopping_counter = 0
 
     history = {
         'train_acc': [],
@@ -117,7 +130,9 @@ def train():
 
     # 4. Training Loop
     for epoch in range(NUM_EPOCHS):
-        print(f"\nEpoch {epoch+1}/{NUM_EPOCHS}")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"\nEpoch {epoch+1}/{NUM_EPOCHS} | Current LR: {current_lr:.2e}")
+        
         
         # --- TRAINING PHASE ---
         model.train()
@@ -186,14 +201,29 @@ def train():
         
         print(f"Val   | Loss: {val_epoch_loss:.4f} | Acc: {val_epoch_acc:.4f}")
         
-        # --- CHECKPOINTING (Lowest Loss) ---
+        # --- STEP SCHEDULER ---
+        # Updates Learning Rate based on Val Loss
+        scheduler.step(val_epoch_loss)
+        
+        # --- CHECKPOINTING & EARLY STOPPING ---
         if val_epoch_loss < best_val_loss:
             best_val_loss = val_epoch_loss
-            torch.save(model.state_dict(), "best_sequence_classifier.pt")
+            torch.save(model.state_dict(), "./models/best_sequence_classifier_30frames.pt")
             print(f"--> New Best Model Saved! (Low Loss: {best_val_loss:.4f})")
+            # Reset counter since we found a better model
+            early_stopping_counter = 0
+        else:
+            # Increment counter if no improvement
+            early_stopping_counter += 1
+            print(f"No improvement. Early Stopping Counter: {early_stopping_counter}/{EARLY_STOPPING_PATIENCE}")
+            
+            if early_stopping_counter >= EARLY_STOPPING_PATIENCE:
+                print("\n!!! EARLY STOPPING TRIGGERED !!!")
+                print(f"Validation loss hasn't improved for {EARLY_STOPPING_PATIENCE} epochs.")
+                break
 
     # Save final model
-    torch.save(model.state_dict(), "final_sequence_classifier.pt")
+    torch.save(model.state_dict(), "./models/final_sequence_classifier_30frames.pt")
     print("\nTraining complete.")
     print(f"Best Validation Loss: {best_val_loss:.4f}")
     
@@ -202,7 +232,6 @@ def train():
                  history['train_loss'], history['val_loss'])
 
 if __name__ == "__main__":
-    # Basic check to see if paths exist
     if os.path.exists(TRAIN_ROOT) and os.path.exists(VAL_ROOT):
         train()
     else:
